@@ -1,0 +1,9 @@
+# cp terraform.tfvars.example terraform.tfvars (terraform.tfvars는 커밋하지 않습니다)
+hosted_zone_name = "example.com"
+domain_name      = "mro.example.com"
+environment      = "prod"
+image_tag        = "REPLACE_WITH_GIT_SHA"
+
+# 비용 조절
+# services_enabled  = false          # ECS 서비스 0개
+# db_instance_class = "db.t4g.micro"
