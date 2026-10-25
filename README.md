@@ -1,7 +1,7 @@
 # 항공기 정비요청 Agent 인프라
 
 AWS 인프라(Terraform)와 배포를 맡는 레포입니다. **운영 배포는 이 레포의 Deploy 워크플로에서만 합니다.**
-로컬 `mro-agent-integration/scripts/up.sh` 스택을 AWS로 옮긴 정의이며, 서비스 이름·포트·환경변수는
+로컬 `integration/scripts/up.sh` 스택을 AWS로 옮긴 정의이며, 서비스 이름·포트·환경변수는
 각 서비스 레포의 compose 파일과 `.env.example`을 따릅니다.
 
 > 상태: 코드 작성과 `terraform validate`까지 확인했습니다. 실제 AWS에 apply하지는 않았습니다.
@@ -12,7 +12,7 @@ AWS 인프라(Terraform)와 배포를 맡는 레포입니다. **운영 배포는
 [서비스 레포 ×4]  PR → 리뷰 → main 병합 → CI 통과 → Release: 이미지를 ECR에 (태그 = 커밋 SHA)
       │ repository_dispatch (봇)
       ▼
-[mro-agent-integration]  submodule을 각 레포 main으로 갱신 → 통합 검증 → 통과 시 커밋 + verified-* 태그
+[integration]  submodule을 각 레포 main으로 갱신 → 통합 검증 → 통과 시 커밋 + verified-* 태그
       │ repository_dispatch (봇)
       ▼
 [infra]  Promote: deploy/release.json 갱신 PR → 리뷰·병합 → Deploy: production 승인 → terraform apply
@@ -21,7 +21,7 @@ AWS 인프라(Terraform)와 배포를 맡는 레포입니다. **운영 배포는
 | 레포 | 사람이 하는 일 | 자동으로 일어나는 일 |
 | --- | --- | --- |
 | backend · dashboard · agent · LLM | PR, 리뷰, 병합 | 이미지 빌드·ECR push, 통합 레포에 알림 |
-| mro-agent-integration | 없음 (main은 봇만 push) | 조합 갱신, 검증, verified 태그, infra에 알림 |
+| integration | 없음 (main은 봇만 push) | 조합 갱신, 검증, verified 태그, infra에 알림 |
 | infra | release PR 리뷰·병합, 배포 승인, 인프라 변경 PR | 배포 |
 
 - `deploy/release.json`이 **지금 운영에 나가 있는(나갈) 조합**입니다. 서비스별 커밋 SHA가 곧 이미지 태그입니다.
@@ -104,7 +104,7 @@ aws ecs run-task --cluster "$(terraform output -raw ecs_cluster)" --launch-type 
 terraform apply
 
 # 8. RAG 전달본 복원 (backend가 healthy가 된 뒤)
-gh release download data-2026-10-22 --repo mro-agent-proj/mro-agent-integration --dir /tmp/release
+gh release download data-2026-10-22 --repo mro-agent-proj/integration --dir /tmp/release
 aws s3 cp --recursive /tmp/release "s3://$(terraform output -raw rag_data_bucket)/data-2026-10-22/"
 aws ecs run-task ... --task-definition mro-prod-rag-restore ...   # 6번과 같은 옵션
 
@@ -115,14 +115,14 @@ aws ecs run-task ... --task-definition mro-prod-rag-restore ...   # 6번과 같�
 
 1. **GitHub App** (레포 간 자동화용 봇): 조직 Settings → Developer settings → GitHub Apps → New
    - 권한: Contents *Read and write*, Pull requests *Read and write*, Metadata *Read*
-   - 설치: backend, dashboard, agent, LLM, mro-agent-integration, infra
+   - 설치: backend, dashboard, agent, LLM, integration, infra
    - 조직 변수 `RELEASE_APP_ID`(App ID), 조직 시크릿 `RELEASE_APP_PRIVATE_KEY`(발급한 private key)
 2. **AWS 연결 변수** (`terraform output`으로 확인)
    - 서비스 레포 4개: 레포 변수 `AWS_PUSH_ROLE_ARN` = `github_push_role_arns`의 해당 값, 조직 변수 `RELEASES_BUCKET`, `AWS_REGION`
    - infra 레포: `AWS_TERRAFORM_ROLE_ARN`, `TF_STATE_BUCKET`, `TF_HOSTED_ZONE_NAME`, `TF_DOMAIN_NAME`,
      `TF_GRAFANA_ALLOWED_CIDRS`(JSON 목록, 예: `["203.0.113.10/32"]`)
 3. **infra 레포** Settings → Environments → `production`: Required reviewers 지정. main 브랜치 보호(PR·리뷰 필수).
-4. **mro-agent-integration** Settings → Rules: main에 push·PR 병합을 막고 GitHub App만 우회(bypass) 허용.
+4. **integration** Settings → Rules: main에 push·PR 병합을 막고 GitHub App만 우회(bypass) 허용.
    문서(`report/` 등)는 관리자만 우회해서 고칩니다.
 
 AWS 변수가 비어 있으면 Release의 ECR 단계와 Deploy가 건너뛰어지므로, 인프라를 올리기 전에도 워크플로는 실패하지 않습니다.
