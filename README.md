@@ -6,6 +6,19 @@ AWS 인프라(Terraform)와 배포를 맡는 레포입니다. **운영 배포는
 
 > 상태: 코드 작성과 `terraform validate`까지 확인했습니다. 실제 AWS에 apply하지는 않았습니다.
 
+## 레포 구성
+
+| 레포 | 역할 |
+| --- | --- |
+| [dashboard](https://github.com/mro-agent-proj/dashboard) | 신고자·정비팀·관리자 화면 (Vue 3) |
+| [backend](https://github.com/mro-agent-proj/backend) | 계정·요청·배정 API, DB·RabbitMQ, MCP 토큰 발급 (Spring Boot) |
+| [LLM](https://github.com/mro-agent-proj/LLM) | AI 서버: LLM1 분류 → LLM2 조사 → LLM3 검토 (FastAPI + LangGraph) |
+| [agent](https://github.com/mro-agent-proj/agent) | MCP 서버 2개: business-mcp, rag-mcp (읽기 전용) |
+| [integration](https://github.com/mro-agent-proj/integration) | 서비스 4개의 검증된 커밋 조합, 로컬 실행·평가 스크립트 (봇이 자동 갱신) |
+| **infra** | **이 레포.** AWS 인프라(Terraform)와 운영 배포. 배포는 여기서만 합니다 |
+| [deliverables](https://github.com/mro-agent-proj/deliverables) | 최종 결과보고서, 아키텍처 다이어그램 등 산출물 |
+| [data](https://github.com/mro-agent-proj/data) | RAG 데이터 전달본 (비공개, 외부 저작물 가공 데이터 포함) |
+
 ## 배포 흐름
 
 ```
