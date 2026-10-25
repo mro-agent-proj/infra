@@ -95,9 +95,11 @@ module "backend" {
   service_connect_alias = "backend"
 
   environment = {
-    AI_MODE                     = "rabbit"
-    DB_URL                      = "jdbc:postgresql://${aws_db_instance.main.address}:5432/mro"
-    DB_USERNAME                 = aws_db_instance.main.username
+    AI_MODE = "rabbit"
+    DB_URL  = "jdbc:postgresql://${aws_db_instance.main.address}:5432/mro"
+    # 앱은 DML 전용 계정(db-init이 생성), 마이그레이션만 마스터 계정 (Spring Boot spring.flyway.user)
+    DB_USERNAME                 = "mro_app"
+    SPRING_FLYWAY_USER          = aws_db_instance.main.username
     RABBITMQ_HOST               = local.mq_host
     RABBITMQ_PORT               = "5671"
     RABBITMQ_USERNAME           = "mro"
@@ -106,7 +108,8 @@ module "backend" {
     CORS_ORIGINS                = "https://${var.domain_name}"
   }
   secrets = {
-    DB_PASSWORD             = local.db_master_password
+    DB_PASSWORD             = local.secret["app_db_password"]
+    SPRING_FLYWAY_PASSWORD  = local.db_master_password
     RABBITMQ_PASSWORD       = local.secret["rabbitmq_password"]
     JWT_SECRET              = local.secret["jwt_secret"]
     MCP_BUSINESS_JWT_SECRET = local.secret["mcp_business_jwt_secret"]

@@ -37,8 +37,12 @@ locals {
     { name = "PGSSLMODE", value = "require" },
   ]
 
-  # 여러 번 실행해도 안전합니다. 권한(GRANT)은 backend Flyway V4가 부여합니다.
+  # 여러 번 실행해도 안전합니다. MCP 조회 계정의 권한(GRANT)은 backend Flyway V4가 부여합니다.
   # V4는 계정이 없으면 NOLOGIN으로 만들기 때문에, backend가 먼저 떴어도 여기서 LOGIN을 줍니다.
+  #
+  # mro_app: backend 실행 계정. 실행 중에는 DML(SELECT·INSERT·UPDATE·DELETE)과 시퀀스만 씁니다.
+  # 스키마·테이블은 Flyway가 마스터 계정(mro)으로 만들고 소유하므로, 앞으로 생길 객체에도
+  # 권한이 가도록 DEFAULT PRIVILEGES를 겁니다. rag 스키마는 V1과 같은 IF NOT EXISTS로 미리 만듭니다.
   db_init_sql = <<-SQL
     DO $$ BEGIN
       IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'mro_reader') THEN
@@ -47,9 +51,22 @@ locals {
       IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'mro_business_reader') THEN
         CREATE ROLE mro_business_reader NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
       END IF;
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'mro_app') THEN
+        CREATE ROLE mro_app NOSUPERUSER NOCREATEDB NOCREATEROLE;
+      END IF;
     END $$;
     ALTER ROLE mro_reader LOGIN PASSWORD :'rag_password';
     ALTER ROLE mro_business_reader LOGIN PASSWORD :'business_password';
+    ALTER ROLE mro_app LOGIN PASSWORD :'app_password';
+
+    CREATE SCHEMA IF NOT EXISTS rag;
+    GRANT USAGE ON SCHEMA public, rag TO mro_app;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public, rag TO mro_app;
+    GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public, rag TO mro_app;
+    ALTER DEFAULT PRIVILEGES FOR ROLE mro IN SCHEMA public, rag
+      GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO mro_app;
+    ALTER DEFAULT PRIVILEGES FOR ROLE mro IN SCHEMA public, rag
+      GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO mro_app;
   SQL
 }
 
@@ -71,12 +88,14 @@ resource "aws_ecs_task_definition" "db_init" {
       "psql -v ON_ERROR_STOP=1",
       "-v rag_password=\"$RAG_READER_PASSWORD\"",
       "-v business_password=\"$BUSINESS_READER_PASSWORD\"",
+      "-v app_password=\"$APP_DB_PASSWORD\"",
     ])]
     environment = concat(local.pg_env, [{ name = "INIT_SQL", value = local.db_init_sql }])
     secrets = [
       { name = "PGPASSWORD", valueFrom = local.db_master_password },
       { name = "RAG_READER_PASSWORD", valueFrom = local.secret["rag_reader_password"] },
       { name = "BUSINESS_READER_PASSWORD", valueFrom = local.secret["business_reader_password"] },
+      { name = "APP_DB_PASSWORD", valueFrom = local.secret["app_db_password"] },
     ]
     logConfiguration = local.ops_log
   }])

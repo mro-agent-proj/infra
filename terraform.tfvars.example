@@ -12,6 +12,9 @@ image_tag        = "REPLACE_WITH_GIT_SHA"
 #   rag-mcp      = { address = "rag-mcp:8102", metrics_path = "/metrics" }
 # }
 
+# Grafana에 접근할 IP 대역 (비우면 외부 접근 차단)
+# grafana_allowed_cidrs = ["203.0.113.10/32"]
+
 # 비용 조절
 # services_enabled  = false          # ECS 서비스 0개
 # db_instance_class = "db.t4g.micro"

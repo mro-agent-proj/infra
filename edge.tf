@@ -192,6 +192,7 @@ resource "aws_cloudfront_distribution" "main" {
   default_root_object = "index.html"
   price_class         = "PriceClass_200"
   http_version        = "http2and3"
+  web_acl_id          = aws_wafv2_web_acl.edge.arn
 
   origin {
     origin_id                = "frontend"
@@ -255,6 +256,195 @@ resource "aws_cloudfront_distribution" "main" {
     acm_certificate_arn      = aws_acm_certificate_validation.cloudfront.certificate_arn
     ssl_support_method       = "sni-only"
     minimum_protocol_version = "TLSv1.2_2021"
+  }
+}
+
+# ---------- WAF: Grafana 접근 제한 ----------
+# Grafana는 관리 화면이라 허용한 IP 대역에서만 엽니다. 나머지 경로(/, /api)는 그대로 통과합니다.
+# CloudFront용 WAF는 us-east-1에 만들어야 합니다.
+locals {
+  grafana_cidrs = {
+    IPV4 = [for c in var.grafana_allowed_cidrs : c if !strcontains(c, ":")]
+    IPV6 = [for c in var.grafana_allowed_cidrs : c if strcontains(c, ":")]
+  }
+
+  # 우선순위 0~2는 Grafana 규칙. 그 뒤로 평판 → 공격 패턴 → 횟수 제한 순서로 평가합니다.
+  waf_managed_groups = [
+    { name = "AWSManagedRulesAmazonIpReputationList", priority = 3, count_rules = [] },
+    { name = "AWSManagedRulesCommonRuleSet", priority = 4, count_rules = [
+      "CrossSiteScripting_BODY", "SizeRestrictions_BODY", "GenericLFI_BODY", "GenericRFI_BODY",
+    ] },
+    { name = "AWSManagedRulesSQLiRuleSet", priority = 5, count_rules = ["SQLi_BODY", "SQLiExtendedPatterns_BODY"] },
+    { name = "AWSManagedRulesKnownBadInputsRuleSet", priority = 6, count_rules = [] },
+  ]
+
+  waf_rate_limits = [
+    { name = "rate-limit-auth", priority = 7, limit = var.waf_auth_rate_limit, path_prefix = "/api/v1/auth/" },
+    { name = "rate-limit-all", priority = 8, limit = var.waf_rate_limit, path_prefix = null },
+  ]
+}
+
+resource "aws_wafv2_ip_set" "grafana" {
+  for_each           = local.grafana_cidrs
+  provider           = aws.us_east_1
+  name               = "${local.name}-grafana-${lower(each.key)}"
+  scope              = "CLOUDFRONT"
+  ip_address_version = each.key
+  addresses          = each.value
+}
+
+resource "aws_wafv2_web_acl" "edge" {
+  provider = aws.us_east_1
+  name     = "${local.name}-edge"
+  scope    = "CLOUDFRONT"
+
+  default_action {
+    allow {}
+  }
+
+  # 우선순위 0·1: 허용 대역에서 온 /grafana 요청은 통과, 2: 그 밖의 /grafana 요청은 차단
+  dynamic "rule" {
+    for_each = { IPV4 = 0, IPV6 = 1 }
+    content {
+      name     = "grafana-allow-${lower(rule.key)}"
+      priority = rule.value
+      action {
+        allow {}
+      }
+      statement {
+        and_statement {
+          statement {
+            byte_match_statement {
+              search_string         = "/grafana"
+              positional_constraint = "STARTS_WITH"
+              field_to_match {
+                uri_path {}
+              }
+              text_transformation {
+                priority = 0
+                type     = "NONE"
+              }
+            }
+          }
+          statement {
+            ip_set_reference_statement {
+              arn = aws_wafv2_ip_set.grafana[rule.key].arn
+            }
+          }
+        }
+      }
+      visibility_config {
+        cloudwatch_metrics_enabled = true
+        metric_name                = "grafana-allow-${lower(rule.key)}"
+        sampled_requests_enabled   = true
+      }
+    }
+  }
+
+  rule {
+    name     = "grafana-block-others"
+    priority = 2
+    action {
+      block {}
+    }
+    statement {
+      byte_match_statement {
+        search_string         = "/grafana"
+        positional_constraint = "STARTS_WITH"
+        field_to_match {
+          uri_path {}
+        }
+        text_transformation {
+          priority = 0
+          type     = "NONE"
+        }
+      }
+    }
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "grafana-block-others"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # ---------- 전체 트래픽 보호 ----------
+  # AWS 관리형 규칙 그룹. 정비 신고 본문(symptom_text)은 자유 서술이라 본문 검사 규칙은
+  # 오탐을 확인할 때까지 count(기록만)로 둡니다. 로그를 본 뒤 count_rules에서 빼면 차단으로 바뀝니다.
+  dynamic "rule" {
+    for_each = local.waf_managed_groups
+    content {
+      name     = rule.value.name
+      priority = rule.value.priority
+      override_action {
+        none {}
+      }
+      statement {
+        managed_rule_group_statement {
+          vendor_name = "AWS"
+          name        = rule.value.name
+          dynamic "rule_action_override" {
+            for_each = rule.value.count_rules
+            content {
+              name = rule_action_override.value
+              action_to_use {
+                count {}
+              }
+            }
+          }
+        }
+      }
+      visibility_config {
+        cloudwatch_metrics_enabled = true
+        metric_name                = rule.value.name
+        sampled_requests_enabled   = true
+      }
+    }
+  }
+
+  # 같은 IP의 요청 횟수 제한 (5분 기준). 로그인·가입은 무차별 대입 방지를 위해 따로 낮게 둡니다.
+  dynamic "rule" {
+    for_each = local.waf_rate_limits
+    content {
+      name     = rule.value.name
+      priority = rule.value.priority
+      action {
+        block {}
+      }
+      statement {
+        rate_based_statement {
+          limit                 = rule.value.limit
+          aggregate_key_type    = "IP"
+          evaluation_window_sec = 300
+          dynamic "scope_down_statement" {
+            for_each = rule.value.path_prefix == null ? [] : [rule.value.path_prefix]
+            content {
+              byte_match_statement {
+                search_string         = scope_down_statement.value
+                positional_constraint = "STARTS_WITH"
+                field_to_match {
+                  uri_path {}
+                }
+                text_transformation {
+                  priority = 0
+                  type     = "NONE"
+                }
+              }
+            }
+          }
+        }
+      }
+      visibility_config {
+        cloudwatch_metrics_enabled = true
+        metric_name                = rule.value.name
+        sampled_requests_enabled   = true
+      }
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "${local.name}-edge"
+    sampled_requests_enabled   = true
   }
 }
 

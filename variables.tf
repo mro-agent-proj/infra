@@ -104,7 +104,31 @@ variable "prometheus_scrape_targets" {
 }
 
 variable "github_repository" {
-  description = "이미지·프론트 배포 역할을 assume할 GitHub 저장소 (owner/name)"
+  description = "배포 역할을 assume할 GitHub 저장소 (owner/name)"
   type        = string
   default     = "mro-agent-proj/mro-agent-integration"
+}
+
+variable "github_deploy_environment" {
+  description = "terraform apply 역할을 받을 GitHub environment. 승인자를 지정해 두어야 합니다."
+  type        = string
+  default     = "production"
+}
+
+variable "waf_rate_limit" {
+  description = "같은 IP가 5분 동안 보낼 수 있는 전체 요청 수. 넘으면 WAF가 차단합니다."
+  type        = number
+  default     = 2000
+}
+
+variable "waf_auth_rate_limit" {
+  description = "같은 IP가 5분 동안 /api/v1/auth/ (로그인·가입)에 보낼 수 있는 요청 수"
+  type        = number
+  default     = 100
+}
+
+variable "grafana_allowed_cidrs" {
+  description = "/grafana* 에 접근할 수 있는 IP 대역 (IPv4·IPv6 혼용 가능). 비우면 외부에서 Grafana에 접근할 수 없습니다."
+  type        = list(string)
+  default     = []
 }

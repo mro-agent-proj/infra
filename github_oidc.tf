@@ -66,3 +66,79 @@ resource "aws_iam_role_policy" "github_deploy" {
   role   = aws_iam_role.github_deploy.id
   policy = data.aws_iam_policy_document.github_deploy.json
 }
+
+# ---------- terraform apply 역할 (Deploy) ----------
+# 인프라 전체를 바꿀 수 있는 역할이라 브랜치가 아니라 GitHub environment로 묶습니다.
+# 저장소 Settings → Environments에서 이 environment에 승인자(required reviewers)를 지정해야
+# 사람이 승인한 실행만 이 역할을 받습니다.
+data "aws_iam_policy_document" "github_terraform_assume" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.github.arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:${var.github_repository}:environment:${var.github_deploy_environment}"]
+    }
+  }
+}
+
+resource "aws_iam_role" "github_terraform" {
+  name               = "${local.name}-github-terraform"
+  assume_role_policy = data.aws_iam_policy_document.github_terraform_assume.json
+}
+
+# IAM을 뺀 AWS 서비스 전반
+resource "aws_iam_role_policy_attachment" "github_terraform_poweruser" {
+  role       = aws_iam_role.github_terraform.name
+  policy_arn = "arn:aws:iam::aws:policy/PowerUserAccess"
+}
+
+# IAM은 이 스택이 만드는 이름(mro-<env>-*)과 GitHub OIDC 공급자로만 한정
+data "aws_iam_policy_document" "github_terraform_iam" {
+  statement {
+    actions = [
+      "iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:UpdateRole", "iam:UpdateAssumeRolePolicy",
+      "iam:TagRole", "iam:UntagRole", "iam:ListRoleTags", "iam:PassRole",
+      "iam:PutRolePolicy", "iam:GetRolePolicy", "iam:DeleteRolePolicy", "iam:ListRolePolicies",
+      "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:ListAttachedRolePolicies",
+      "iam:ListInstanceProfilesForRole",
+    ]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name}-*"]
+  }
+  statement {
+    actions = [
+      "iam:CreateOpenIDConnectProvider", "iam:DeleteOpenIDConnectProvider", "iam:GetOpenIDConnectProvider",
+      "iam:UpdateOpenIDConnectProviderThumbprint", "iam:TagOpenIDConnectProvider",
+      "iam:AddClientIDToOpenIDConnectProvider", "iam:RemoveClientIDFromOpenIDConnectProvider",
+    ]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com"]
+  }
+  # ECS·ELB·RDS·Amazon MQ가 처음 쓸 때 만드는 서비스 연결 역할
+  statement {
+    actions   = ["iam:CreateServiceLinkedRole"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:AWSServiceName"
+      values = [
+        "ecs.amazonaws.com", "elasticloadbalancing.amazonaws.com", "rds.amazonaws.com",
+        "mq.amazonaws.com", "elasticfilesystem.amazonaws.com",
+      ]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "github_terraform_iam" {
+  name   = "scoped-iam"
+  role   = aws_iam_role.github_terraform.id
+  policy = data.aws_iam_policy_document.github_terraform_iam.json
+}

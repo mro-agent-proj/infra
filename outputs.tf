@@ -37,7 +37,13 @@ output "openai_secret_id" {
 }
 
 output "github_deploy_role_arn" {
-  value = aws_iam_role.github_deploy.arn
+  description = "이미지 push · 프론트 업로드용 (main 브랜치)"
+  value       = aws_iam_role.github_deploy.arn
+}
+
+output "github_terraform_role_arn" {
+  description = "terraform apply용 (GitHub environment 승인 후)"
+  value       = aws_iam_role.github_terraform.arn
 }
 
 # 1회성 작업 실행에 쓰는 네트워크 설정

@@ -21,7 +21,7 @@
 | `backend`, `business-mcp`, `rag-mcp`, `ai` | ECS Fargate 서비스 4개 |
 | Docker 네트워크 이름 (`business-mcp:8101`) | ECS Service Connect (같은 이름) |
 | `ai-state` 볼륨 | EFS access point (uid 10001) |
-| `docker/postgres/init/01-readers.sh` | 1회성 태스크 `db-init` |
+| `docker/postgres/init/01-readers.sh` | 1회성 태스크 `db-init` (MCP 조회 계정 + backend 앱 계정 `mro_app`) |
 | `rag-restore` 서비스 | 1회성 태스크 `rag-restore` (전달본은 S3) |
 | `pnpm dev` + vite proxy | S3 + CloudFront (`/api`는 ALB로) |
 | `.env`, `.env.mcp` | Secrets Manager (`<name>/app` JSON, `<name>/openai-api-key`) |
@@ -38,10 +38,10 @@
 | `secrets.tf` | JWT·MCP 서명 키·조회 계정 비밀번호 생성, 접속 URL 조립 |
 | `iam.tf` | ECS 실행 역할, 태스크 역할 (ECS Exec, EFS, 전달본 읽기) |
 | `ecs.tf`, `modules/ecs-service/` | 클러스터, ECR (앱 이미지 + Docker Hub pull-through cache), 서비스 4개 |
-| `edge.tf` | ACM, ALB, CloudFront, 프론트 S3, Route 53 |
+| `edge.tf` | ACM, ALB, CloudFront, 프론트 S3, Route 53, WAF |
 | `ops.tf`, `ops/rag-restore.Dockerfile` | `db-init`, `rag-restore` 1회성 태스크 |
 | `monitoring.tf` | Prometheus·Grafana (ECS, EFS 저장), Grafana는 `/grafana/` 경로로 노출 |
-| `github_oidc.tf` | GitHub Actions 배포 역할 (이미지 push·프론트 업로드만) |
+| `github_oidc.tf` | GitHub Actions 역할 2개: 앱 배포(이미지 push·프론트 업로드, main 브랜치), terraform apply(승인된 environment) |
 
 ## 처음 배포
 
@@ -70,7 +70,7 @@ aws secretsmanager put-secret-value --secret-id "$(terraform output -raw openai_
 #    backend/  ai/  mcp/docker/business-mcp.Dockerfile  mcp/docker/rag-mcp.Dockerfile  infra/ops/rag-restore.Dockerfile
 #    → terraform output ecr_repositories 의 주소로 push
 
-# 6. MCP 조회 계정에 LOGIN·비밀번호 부여 (권한은 Flyway V4가 줍니다. 서비스보다 먼저 돌려야 MCP가 첫 기동부터 로그인됩니다)
+# 6. DB 계정 준비: MCP 조회 계정 LOGIN, backend 앱 계정 mro_app 생성·권한 (서비스보다 먼저 실행)
 aws ecs run-task --cluster "$(terraform output -raw ecs_cluster)" --launch-type FARGATE \
   --task-definition mro-prod-db-init \
   --network-configuration "$(terraform output -raw run_task_network_configuration)"
@@ -89,15 +89,47 @@ aws s3 sync dist "s3://$(terraform -chdir=../infra output -raw frontend_bucket)"
 aws cloudfront create-invalidation --distribution-id "$(terraform -chdir=../infra output -raw cloudfront_distribution_id)" --paths '/*'
 ```
 
+## DB 계정
+
+| 계정 | 쓰는 곳 | 권한 |
+| --- | --- | --- |
+| `mro` (RDS 마스터) | backend Flyway 마이그레이션(`SPRING_FLYWAY_USER`), `db-init`, `rag-restore` | 스키마·테이블 소유 |
+| `mro_app` | backend 실행 (`DB_USERNAME`) | `public`·`rag` 테이블 DML, 시퀀스 |
+| `mro_reader`, `mro_business_reader` | rag-mcp, business-mcp | Flyway V4가 준 SELECT만 |
+
+backend는 실행 중에 DDL을 쓰지 않습니다(직접 SQL은 SELECT·INSERT·UPDATE·DELETE와 advisory lock뿐).
+`mro_app`에는 DEFAULT PRIVILEGES를 걸어 두어 Flyway가 나중에 만드는 테이블에도 권한이 갑니다.
+
 ## 새 버전 배포
 
 이미지를 새 태그로 push한 뒤 `terraform apply -var image_tag=<새 SHA>`.
+GitHub Actions에서 돌릴 때는 `github_terraform_role_arn` 역할을 씁니다. 이 역할은 `github_deploy_environment`
+(기본 `production`) environment에서만 받을 수 있으므로, 저장소 Settings → Environments에서 승인자를 지정해 둡니다.
+인프라 전체를 바꿀 수 있는 역할이라 승인 없이 쓰이지 않게 하는 것이 핵심입니다.
 ECS가 롤링 배포하고, 헬스체크에 실패하면 이전 버전으로 되돌립니다(circuit breaker).
 `ai`는 실행 기록이 SQLite라 항상 1개만 돌도록 기존 태스크를 먼저 내립니다.
+
+## 보안 (WAF)
+
+CloudFront에 붙은 WAF가 서비스로 들어오는 모든 요청을 아래 순서로 검사합니다.
+
+| 순서 | 규칙 | 동작 |
+| --- | --- | --- |
+| 0~2 | Grafana | `/grafana*`는 `grafana_allowed_cidrs` 대역만 통과, 나머지는 차단 |
+| 3 | `AmazonIpReputationList` | 알려진 봇·악성 IP 차단 |
+| 4 | `CommonRuleSet` | XSS·경로 조작 등 OWASP 기본 공격 차단 |
+| 5 | `SQLiRuleSet` | SQL 인젝션 차단 |
+| 6 | `KnownBadInputsRuleSet` | Log4j 등 Java 계열 공격 패턴 차단 |
+| 7 | `rate-limit-auth` | 같은 IP가 5분에 `/api/v1/auth/` 요청 `waf_auth_rate_limit`(기본 100)회 초과 시 차단 |
+| 8 | `rate-limit-all` | 같은 IP가 5분에 `waf_rate_limit`(기본 2,000)회 초과 시 차단 |
+
+정비 신고 본문(`symptom_text`)은 자유 서술이라 본문을 검사하는 항목(`*_BODY`)은 처음에 count(기록만)로 둡니다.
+CloudWatch의 WAF 지표·샘플 요청으로 오탐이 없는지 확인한 뒤 `edge.tf`의 `count_rules`에서 빼면 차단으로 바뀝니다.
 
 ## 모니터링
 
 - Grafana: `https://<domain>/grafana/`, 계정 `admin`, 비밀번호는 Secrets Manager `<name>/app`의 `grafana_admin_password`
+- `/grafana*`는 WAF가 `grafana_allowed_cidrs` 대역에서만 열어 줍니다. 비워 두면 외부에서 접근할 수 없습니다.
 - 데이터소스는 시작할 때 자동 등록됩니다: **CloudWatch**(ECS·RDS·Amazon MQ·ALB 지표, 태스크 역할로 조회), **Prometheus**
 - Prometheus는 외부에 노출하지 않고 Grafana에서만 조회합니다. 설정 파일은 Terraform이 만들어 환경변수로 넘깁니다.
 - 지금은 앱들이 메트릭 엔드포인트를 내보내지 않아 Prometheus는 자기 자신만 수집합니다.
@@ -108,7 +140,7 @@ ECS가 롤링 배포하고, 헬스체크에 실패하면 이전 버전으로 되
 
 ## 비용 (서울 리전, 상시 가동 기준 대략)
 
-월 약 $240, 하루 약 $8. 모니터링(Fargate 2개 + EFS)을 켜면 월 $25~35가 더해집니다. NAT·ALB·RDS·Amazon MQ가 트래픽과 무관하게 고정으로 나갑니다.
+월 약 $240, 하루 약 $8. 모니터링(Fargate 2개 + EFS)을 켜면 월 $25~35, WAF(Web ACL + 규칙 9개, 관리형 규칙 그룹 4개 포함)는 월 약 $15가 더해집니다. NAT·ALB·RDS·Amazon MQ가 트래픽과 무관하게 고정으로 나갑니다.
 안 쓸 때는 `terraform apply -var services_enabled=false`로 컨테이너 비용만 줄이거나,
 `terraform destroy`로 전부 지웁니다. `environment=prod`는 RDS 삭제 보호가 켜져 destroy가 막히므로,
 시연용으로 올렸다 내릴 거라면 처음부터 `environment=dev`로 만듭니다.
