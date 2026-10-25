@@ -1,9 +1,9 @@
 {
-  "combo": "mro-agent-integration@74313d4",
+  "combo": "integration@verified-20261025T155459Z",
   "services": {
-    "backend": "c6479cf168427839d4e15b2b36a1182ccf394a56",
-    "LLM": "d83ee967853a436814d6d0d04dc5ef91b9a26ec3",
-    "agent": "80554cea8343be52fe4d25ce5c97942391c5c38a",
-    "dashboard": "1491195007b3fb0843da3927c9bde519b4607cdc"
+    "backend": "b799c97c091e46123481ac564ed953e30188a114",
+    "LLM": "427af31ba70fb5c304b036347fb2f3daeb67e227",
+    "agent": "cc07797ebe16084ebb94c7b7c8b3e64472fc1e04",
+    "dashboard": "ec298bd62b347bc476487aa1e73acb5963b41c0a"
   }
 }
