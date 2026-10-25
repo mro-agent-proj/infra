@@ -40,6 +40,7 @@
 | `ecs.tf`, `modules/ecs-service/` | 클러스터, ECR, 서비스 4개 |
 | `edge.tf` | ACM, ALB, CloudFront, 프론트 S3, Route 53 |
 | `ops.tf`, `ops/rag-restore.Dockerfile` | `db-init`, `rag-restore` 1회성 태스크 |
+| `monitoring.tf` | Prometheus·Grafana (ECS, EFS 저장), Grafana는 `/grafana/` 경로로 노출 |
 | `github_oidc.tf` | GitHub Actions 배포 역할 (이미지 push·프론트 업로드만) |
 
 ## 처음 배포
@@ -90,9 +91,20 @@ aws cloudfront create-invalidation --distribution-id "$(terraform -chdir=../infr
 ECS가 롤링 배포하고, 헬스체크에 실패하면 이전 버전으로 되돌립니다(circuit breaker).
 `ai`는 실행 기록이 SQLite라 항상 1개만 돌도록 기존 태스크를 먼저 내립니다.
 
+## 모니터링
+
+- Grafana: `https://<domain>/grafana/`, 계정 `admin`, 비밀번호는 Secrets Manager `<name>/app`의 `grafana_admin_password`
+- 데이터소스는 시작할 때 자동 등록됩니다: **CloudWatch**(ECS·RDS·Amazon MQ·ALB 지표, 태스크 역할로 조회), **Prometheus**
+- Prometheus는 외부에 노출하지 않고 Grafana에서만 조회합니다. 설정 파일은 Terraform이 만들어 환경변수로 넘깁니다.
+- 지금은 앱들이 메트릭 엔드포인트를 내보내지 않아 Prometheus는 자기 자신만 수집합니다.
+  각 레포에 메트릭이 추가되면 `terraform.tfvars`의 `prometheus_scrape_targets` 주석을 풀고 apply합니다.
+  보안 그룹(Prometheus → 각 서비스 포트)과 Service Connect 이름(`backend`, `ai`, `business-mcp`, `rag-mcp`)은 미리 열어 두었습니다.
+- Prometheus TSDB는 EFS에 둡니다. Prometheus 공식 문서는 NFS를 지원 대상으로 보지 않으므로, 데이터가 커지거나
+  장기 보관이 필요해지면 Amazon Managed Prometheus(remote_write)로 옮기는 것을 검토합니다.
+
 ## 비용 (서울 리전, 상시 가동 기준 대략)
 
-월 약 $240, 하루 약 $8. NAT·ALB·RDS·Amazon MQ가 트래픽과 무관하게 고정으로 나갑니다.
+월 약 $240, 하루 약 $8. 모니터링(Fargate 2개 + EFS)을 켜면 월 $25~35가 더해집니다. NAT·ALB·RDS·Amazon MQ가 트래픽과 무관하게 고정으로 나갑니다.
 안 쓸 때는 `terraform apply -var services_enabled=false`로 컨테이너 비용만 줄이거나,
 `terraform destroy`로 전부 지웁니다. `environment=prod`는 RDS 삭제 보호가 켜져 destroy가 막히므로,
 시연용으로 올렸다 내릴 거라면 처음부터 `environment=dev`로 만듭니다.
@@ -102,3 +114,5 @@ ECS가 롤링 배포하고, 헬스체크에 실패하면 이전 버전으로 되
 - 이미지 빌드·push와 프론트 배포를 GitHub Actions 워크플로로 만들기 (`github_deploy_role_arn` 사용)
 - AI 오토스케일: 실행 기록을 SQLite 대신 Postgres(`CHECKPOINT_DATABASE_URL`)로 옮긴 뒤 큐 길이 기준으로
 - dev/prod 분리 시 backend `key`와 tfvars를 환경별로
+- 앱 메트릭: backend `micrometer-registry-prometheus` + actuator 노출 목록에 `prometheus`, ai·MCP는 `/metrics` 추가 → scrape 대상 등록
+- Grafana 대시보드 프로비저닝 (지금은 데이터소스만)

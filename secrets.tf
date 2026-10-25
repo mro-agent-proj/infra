@@ -9,6 +9,7 @@ resource "random_password" "app" {
     "rag_reader_password",
     "business_reader_password",
     "origin_verify",
+    "grafana_admin_password",
   ])
   length  = 48
   special = false
@@ -29,6 +30,7 @@ resource "aws_secretsmanager_secret_version" "app" {
     rag_reader_password      = random_password.app["rag_reader_password"].result
     business_reader_password = random_password.app["business_reader_password"].result
     rabbitmq_password        = random_password.rabbitmq.result
+    grafana_admin_password   = random_password.app["grafana_admin_password"].result
 
     # MCP와 AI는 비밀번호가 들어간 접속 URL 하나를 받습니다.
     # RDS PostgreSQL 16은 SSL을 강제(rds.force_ssl=1)하므로 asyncpg에 명시합니다.
@@ -52,7 +54,7 @@ locals {
     for k in [
       "jwt_secret", "mcp_business_jwt_secret", "mcp_rag_jwt_secret", "rag_cursor_secret",
       "rag_reader_password", "business_reader_password", "rabbitmq_password",
-      "rag_database_url", "business_database_url", "rabbitmq_url",
+      "rag_database_url", "business_database_url", "rabbitmq_url", "grafana_admin_password",
     ] : k => "${local.app_secret}:${k}::"
   }
   db_master_password = "${aws_db_instance.main.master_user_secret[0].secret_arn}:password::"

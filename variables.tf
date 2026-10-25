@@ -68,6 +68,33 @@ variable "log_retention_days" {
   default = 14
 }
 
+variable "prometheus_image" {
+  type    = string
+  default = "prom/prometheus:v3.5.0"
+}
+
+variable "grafana_image" {
+  type    = string
+  default = "grafana/grafana-oss:12.1.0"
+}
+
+variable "prometheus_retention" {
+  type    = string
+  default = "15d"
+}
+
+variable "prometheus_scrape_targets" {
+  description = <<-EOT
+    수집 대상 (job 이름 => Service Connect 주소·경로). 앱에 메트릭 엔드포인트가 생긴 뒤 추가합니다.
+    예: backend = { address = "backend:8080", metrics_path = "/actuator/prometheus" }
+  EOT
+  type = map(object({
+    address      = string
+    metrics_path = string
+  }))
+  default = {}
+}
+
 variable "github_repository" {
   description = "이미지·프론트 배포 역할을 assume할 GitHub 저장소 (owner/name)"
   type        = string

@@ -1,5 +1,6 @@
 # 사용자 ─▶ CloudFront ─┬─ /*            ─▶ S3 (dashboard 빌드)
-#                       └─ /api/*, /actuator/health ─▶ ALB ─▶ backend
+#                       ├─ /api/*, /actuator/health ─▶ ALB ─▶ backend
+#                       └─ /grafana*                ─▶ ALB ─▶ grafana (monitoring.tf)
 # 프론트와 API가 같은 도메인이라 CORS·별도 리버스 프록시가 필요 없습니다.
 
 data "aws_route53_zone" "main" {
@@ -231,7 +232,7 @@ resource "aws_cloudfront_distribution" "main" {
   }
 
   dynamic "ordered_cache_behavior" {
-    for_each = ["/api/*", "/actuator/health"]
+    for_each = ["/api/*", "/actuator/health", "/grafana*"]
     content {
       path_pattern             = ordered_cache_behavior.value
       target_origin_id         = "backend"

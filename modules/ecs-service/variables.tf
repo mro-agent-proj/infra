@@ -45,6 +45,18 @@ variable "secrets" {
   default     = {}
 }
 
+variable "entry_point" {
+  description = "이미지 ENTRYPOINT 대체. null이면 이미지 기본값"
+  type        = list(string)
+  default     = null
+}
+
+variable "command" {
+  description = "이미지 CMD 대체. null이면 이미지 기본값"
+  type        = list(string)
+  default     = null
+}
+
 variable "health_check_command" {
   description = "컨테이너 헬스체크. null이면 생략 (ALB 헬스체크만 사용)"
   type        = list(string)

@@ -59,6 +59,8 @@ module "backend" {
   memory         = 2048
   desired_count  = local.desired
   container_port = 8080
+  # Prometheus가 backend:8080 으로 수집할 수 있게 이름을 붙입니다.
+  service_connect_alias = "backend"
 
   environment = {
     AI_MODE                     = "rabbit"
@@ -177,6 +179,8 @@ module "ai" {
   desired_count  = local.desired
   container_port = 8100
   stop_timeout   = 30
+  # 인바운드 업무 트래픽은 없고, Prometheus 수집용으로만 이름을 붙입니다.
+  service_connect_alias = "ai"
 
   deployment_minimum_healthy_percent = 0
   deployment_maximum_percent         = 100

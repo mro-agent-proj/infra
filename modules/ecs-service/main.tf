@@ -33,6 +33,8 @@ locals {
         }
       }
     },
+    var.entry_point == null ? {} : { entryPoint = var.entry_point },
+    var.command == null ? {} : { command = var.command },
     var.health_check_command == null ? {} : {
       healthCheck = {
         command     = var.health_check_command

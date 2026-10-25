@@ -2,6 +2,11 @@ output "app_url" {
   value = "https://${var.domain_name}"
 }
 
+output "grafana_url" {
+  description = "로그인: admin / Secrets Manager <name>/app 의 grafana_admin_password"
+  value       = "https://${var.domain_name}/grafana/"
+}
+
 output "cloudfront_distribution_id" {
   value = aws_cloudfront_distribution.main.id
 }

@@ -4,6 +4,14 @@ domain_name      = "mro.example.com"
 environment      = "prod"
 image_tag        = "REPLACE_WITH_GIT_SHA"
 
+# Prometheus 수집 대상: 각 레포에 메트릭 엔드포인트가 생긴 뒤 주석을 풉니다 (경로는 구현에 맞게).
+# prometheus_scrape_targets = {
+#   backend      = { address = "backend:8080", metrics_path = "/actuator/prometheus" }
+#   ai           = { address = "ai:8100", metrics_path = "/metrics" }
+#   business-mcp = { address = "business-mcp:8101", metrics_path = "/metrics" }
+#   rag-mcp      = { address = "rag-mcp:8102", metrics_path = "/metrics" }
+# }
+
 # 비용 조절
 # services_enabled  = false          # ECS 서비스 0개
 # db_instance_class = "db.t4g.micro"
