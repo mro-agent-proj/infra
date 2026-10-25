@@ -2,7 +2,6 @@
 hosted_zone_name = "example.com"
 domain_name      = "mro.example.com"
 environment      = "prod"
-image_tag        = "REPLACE_WITH_GIT_SHA"
 
 # Prometheus 수집 대상: 각 레포에 메트릭 엔드포인트가 생긴 뒤 주석을 풉니다 (경로는 구현에 맞게).
 # prometheus_scrape_targets = {

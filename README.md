@@ -1,9 +1,32 @@
-# AWS 배포 (Terraform)
+# 항공기 정비요청 Agent 인프라
 
-`scripts/up.sh`로 로컬에서 띄우는 스택을 AWS에 그대로 옮긴 정의입니다.
-서비스 이름·포트·환경변수는 각 레포의 compose 파일과 `.env.example`을 따릅니다.
+AWS 인프라(Terraform)와 배포를 맡는 레포입니다. **운영 배포는 이 레포의 Deploy 워크플로에서만 합니다.**
+로컬 `mro-agent-integration/scripts/up.sh` 스택을 AWS로 옮긴 정의이며, 서비스 이름·포트·환경변수는
+각 서비스 레포의 compose 파일과 `.env.example`을 따릅니다.
 
 > 상태: 코드 작성과 `terraform validate`까지 확인했습니다. 실제 AWS에 apply하지는 않았습니다.
+
+## 배포 흐름
+
+```
+[서비스 레포 ×4]  PR → 리뷰 → main 병합 → CI 통과 → Release: 이미지를 ECR에 (태그 = 커밋 SHA)
+      │ repository_dispatch (봇)
+      ▼
+[mro-agent-integration]  submodule을 각 레포 main으로 갱신 → 통합 검증 → 통과 시 커밋 + verified-* 태그
+      │ repository_dispatch (봇)
+      ▼
+[infra]  Promote: deploy/release.json 갱신 PR → 리뷰·병합 → Deploy: production 승인 → terraform apply
+```
+
+| 레포 | 사람이 하는 일 | 자동으로 일어나는 일 |
+| --- | --- | --- |
+| backend · dashboard · agent · LLM | PR, 리뷰, 병합 | 이미지 빌드·ECR push, 통합 레포에 알림 |
+| mro-agent-integration | 없음 (main은 봇만 push) | 조합 갱신, 검증, verified 태그, infra에 알림 |
+| infra | release PR 리뷰·병합, 배포 승인, 인프라 변경 PR | 배포 |
+
+- `deploy/release.json`이 **지금 운영에 나가 있는(나갈) 조합**입니다. 서비스별 커밋 SHA가 곧 이미지 태그입니다.
+- 이미지는 서비스 레포에서 한 번만 빌드합니다. Deploy는 이미지가 ECR에 없으면 배포하지 않습니다.
+- 되돌리기: `release.json`을 이전 조합으로 되돌리는 PR을 병합합니다.
 
 ```
 사용자 ─▶ Route 53 ─▶ CloudFront ─┬─ /*                       ─▶ S3 (dashboard 빌드, OAC)
@@ -41,7 +64,10 @@
 | `edge.tf` | ACM, ALB, CloudFront, 프론트 S3, Route 53, WAF |
 | `ops.tf`, `ops/rag-restore.Dockerfile` | `db-init`, `rag-restore` 1회성 태스크 |
 | `monitoring.tf` | Prometheus·Grafana (ECS, EFS 저장), Grafana는 `/grafana/` 경로로 노출 |
-| `github_oidc.tf` | GitHub Actions 역할 2개: 앱 배포(이미지 push·프론트 업로드, main 브랜치), terraform apply(승인된 environment) |
+| `github_oidc.tf` | GitHub Actions 역할: 서비스 레포별 push 역할 4개(main), infra 레포 terraform 역할(production environment) |
+| `releases.tf` | 서비스 레포 산출물 버킷 (dashboard 빌드) |
+| `deploy/release.json` | 배포할 서비스별 커밋 SHA |
+| `.github/workflows/` | `check`(PR 검사), `promote`(조합 → release PR), `deploy`(배포) |
 
 ## 처음 배포
 
@@ -49,7 +75,7 @@
 
 ```bash
 # 1. state 버킷
-cd infra/bootstrap
+cd bootstrap
 terraform init && terraform apply -var state_bucket_name=mro-agent-tfstate-<계정ID>
 #    → versions.tf의 backend bucket 값을 같은 이름으로 바꿉니다.
 
@@ -66,28 +92,40 @@ terraform apply -var services_enabled=false
 # 4. OpenAI 키
 aws secretsmanager put-secret-value --secret-id "$(terraform output -raw openai_secret_id)" --secret-string 'sk-...'
 
-# 5. 이미지 (레포 루트에서, TAG = git 커밋 SHA)
-#    backend/  ai/  mcp/docker/business-mcp.Dockerfile  mcp/docker/rag-mcp.Dockerfile  infra/ops/rag-restore.Dockerfile
-#    → terraform output ecr_repositories 의 주소로 push
+# 5. 이미지: 아래 'GitHub 설정'을 마친 뒤 각 서비스 레포의 Release 워크플로를 한 번씩 실행(workflow_dispatch)
+#    → release.json의 SHA로 ECR 이미지와 dashboard 빌드가 올라갑니다
 
 # 6. DB 계정 준비: MCP 조회 계정 LOGIN, backend 앱 계정 mro_app 생성·권한 (서비스보다 먼저 실행)
 aws ecs run-task --cluster "$(terraform output -raw ecs_cluster)" --launch-type FARGATE \
   --task-definition mro-prod-db-init \
   --network-configuration "$(terraform output -raw run_task_network_configuration)"
 
-# 7. 서비스 기동
-terraform apply -var image_tag=$TAG
+# 7. 서비스 기동 (이후로는 Deploy 워크플로가 같은 일을 합니다)
+terraform apply
 
 # 8. RAG 전달본 복원 (backend가 healthy가 된 뒤)
 gh release download data-2026-10-22 --repo mro-agent-proj/mro-agent-integration --dir /tmp/release
 aws s3 cp --recursive /tmp/release "s3://$(terraform output -raw rag_data_bucket)/data-2026-10-22/"
 aws ecs run-task ... --task-definition mro-prod-rag-restore ...   # 6번과 같은 옵션
 
-# 9. 프론트
-cd ../frontend && pnpm install && pnpm build
-aws s3 sync dist "s3://$(terraform -chdir=../infra output -raw frontend_bucket)" --delete
-aws cloudfront create-invalidation --distribution-id "$(terraform -chdir=../infra output -raw cloudfront_distribution_id)" --paths '/*'
+# 9. 프론트: Deploy 워크플로를 한 번 실행(workflow_dispatch)하면 dashboard 빌드가 반영됩니다
 ```
+
+## GitHub 설정 (한 번)
+
+1. **GitHub App** (레포 간 자동화용 봇): 조직 Settings → Developer settings → GitHub Apps → New
+   - 권한: Contents *Read and write*, Pull requests *Read and write*, Metadata *Read*
+   - 설치: backend, dashboard, agent, LLM, mro-agent-integration, infra
+   - 조직 변수 `RELEASE_APP_ID`(App ID), 조직 시크릿 `RELEASE_APP_PRIVATE_KEY`(발급한 private key)
+2. **AWS 연결 변수** (`terraform output`으로 확인)
+   - 서비스 레포 4개: 레포 변수 `AWS_PUSH_ROLE_ARN` = `github_push_role_arns`의 해당 값, 조직 변수 `RELEASES_BUCKET`, `AWS_REGION`
+   - infra 레포: `AWS_TERRAFORM_ROLE_ARN`, `TF_STATE_BUCKET`, `TF_HOSTED_ZONE_NAME`, `TF_DOMAIN_NAME`,
+     `TF_GRAFANA_ALLOWED_CIDRS`(JSON 목록, 예: `["203.0.113.10/32"]`)
+3. **infra 레포** Settings → Environments → `production`: Required reviewers 지정. main 브랜치 보호(PR·리뷰 필수).
+4. **mro-agent-integration** Settings → Rules: main에 push·PR 병합을 막고 GitHub App만 우회(bypass) 허용.
+   문서(`report/` 등)는 관리자만 우회해서 고칩니다.
+
+AWS 변수가 비어 있으면 Release의 ECR 단계와 Deploy가 건너뛰어지므로, 인프라를 올리기 전에도 워크플로는 실패하지 않습니다.
 
 ## DB 계정
 
@@ -102,9 +140,8 @@ backend는 실행 중에 DDL을 쓰지 않습니다(직접 SQL은 SELECT·INSERT
 
 ## 새 버전 배포
 
-이미지를 새 태그로 push한 뒤 `terraform apply -var image_tag=<새 SHA>`.
-GitHub Actions에서 돌릴 때는 `github_terraform_role_arn` 역할을 씁니다. 이 역할은 `github_deploy_environment`
-(기본 `production`) environment에서만 받을 수 있으므로, 저장소 Settings → Environments에서 승인자를 지정해 둡니다.
+서비스 레포에서 병합하면 위 흐름대로 release PR이 이 레포에 올라옵니다. 병합하고 Deploy의 `production` 승인을 누르면 배포됩니다.
+Deploy가 쓰는 terraform 역할은 이 레포의 `production` environment에서만 받을 수 있습니다.
 인프라 전체를 바꿀 수 있는 역할이라 승인 없이 쓰이지 않게 하는 것이 핵심입니다.
 ECS가 롤링 배포하고, 헬스체크에 실패하면 이전 버전으로 되돌립니다(circuit breaker).
 `ai`는 실행 기록이 SQLite라 항상 1개만 돌도록 기존 태스크를 먼저 내립니다.
@@ -147,8 +184,7 @@ CloudWatch의 WAF 지표·샘플 요청으로 오탐이 없는지 확인한 뒤 
 
 ## 남은 과제
 
-- 이미지 빌드·push와 프론트 배포를 GitHub Actions 워크플로로 만들기 (`github_deploy_role_arn` 사용)
 - AI 오토스케일: 실행 기록을 SQLite 대신 Postgres(`CHECKPOINT_DATABASE_URL`)로 옮긴 뒤 큐 길이 기준으로
-- dev/prod 분리 시 backend `key`와 tfvars를 환경별로
+- dev/prod 분리 시 backend `key`와 `release.json`을 환경별로 (dev 자동 배포 → prod 승격)
 - 앱 메트릭: backend `micrometer-registry-prometheus` + actuator 노출 목록에 `prometheus`, ai·MCP는 `/metrics` 추가 → scrape 대상 등록
 - Grafana 대시보드 프로비저닝 (지금은 데이터소스만)

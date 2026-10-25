@@ -29,12 +29,6 @@ variable "vpc_cidr" {
   default = "10.20.0.0/16"
 }
 
-variable "image_tag" {
-  description = "ECR에 올린 이미지 태그 (보통 git 커밋 SHA). 새 버전 배포 = 이 값을 바꿔 apply."
-  type        = string
-  default     = "latest"
-}
-
 variable "services_enabled" {
   description = "false면 ECS 서비스를 0개로 둡니다. 최초 DB 초기화 전이나 비용을 아낄 때 씁니다."
   type        = bool
@@ -103,10 +97,16 @@ variable "prometheus_scrape_targets" {
   default = {}
 }
 
-variable "github_repository" {
-  description = "배포 역할을 assume할 GitHub 저장소 (owner/name)"
+variable "github_org" {
+  description = "서비스 레포와 infra 레포가 있는 GitHub 조직"
   type        = string
-  default     = "mro-agent-proj/mro-agent-integration"
+  default     = "mro-agent-proj"
+}
+
+variable "github_infra_repo" {
+  description = "terraform apply 역할을 받을 레포 (배포는 이 레포에서만)"
+  type        = string
+  default     = "infra"
 }
 
 variable "github_deploy_environment" {

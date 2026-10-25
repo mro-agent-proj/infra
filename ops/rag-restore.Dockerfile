@@ -1,5 +1,6 @@
 # RAG 전달본 복원용 1회성 이미지. 로컬 backend/docker-compose.yml의 rag-restore 서비스와 같은 스크립트를 씁니다.
-# 빌드 (레포 루트에서): docker build -f infra/ops/rag-restore.Dockerfile -t <ECR>/mro/rag-restore:<tag> .
+# 빌드 컨텍스트는 backend 레포 체크아웃입니다 (deploy 워크플로가 release.json의 backend SHA로 빌드):
+#   docker build -f ops/rag-restore.Dockerfile -t <ECR>/mro/rag-restore:<backend SHA> <backend 경로>
 FROM pgvector/pgvector:0.8.2-pg16
 
 RUN apt-get update \
@@ -7,8 +8,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /work
-COPY backend/scripts scripts
-COPY backend/src/main/resources/db/migration src/main/resources/db/migration
+COPY scripts scripts
+COPY src/main/resources/db/migration src/main/resources/db/migration
 
 # S3의 Release 첨부파일 → data/rag-dump/ (scripts/fetch-data.sh와 같은 배치) → 복원
 ENTRYPOINT ["bash", "-c", "set -euo pipefail; \

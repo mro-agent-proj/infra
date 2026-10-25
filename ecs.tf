@@ -64,7 +64,17 @@ resource "aws_ecr_repository_creation_template" "dockerhub" {
 }
 
 locals {
-  image = { for k, r in aws_ecr_repository.app : k => "${r.repository_url}:${var.image_tag}" }
+  # 배포할 커밋 조합. 통합 레포가 검증한 조합을 promote 워크플로가 PR로 갱신합니다.
+  release = jsondecode(file("${path.module}/deploy/release.json"))
+  # ECR 리포지토리 → 이미지를 만드는 서비스 레포 (태그 = 그 레포의 커밋 SHA)
+  image_source = {
+    backend        = "backend"
+    "rag-restore"  = "backend"
+    ai             = "LLM"
+    "business-mcp" = "agent"
+    "rag-mcp"      = "agent"
+  }
+  image = { for k, r in aws_ecr_repository.app : k => "${r.repository_url}:${local.release.services[local.image_source[k]]}" }
 
   # 예: <계정>.dkr.ecr.<리전>.amazonaws.com/docker-hub/prom/prometheus:v3.5.0
   # Docker 공식 이미지는 library/ 를 붙입니다 (postgres → library/postgres).

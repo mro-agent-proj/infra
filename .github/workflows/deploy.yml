@@ -1,0 +1,93 @@
+name: Deploy
+
+# 배포는 이 워크플로에서만 합니다. main에 병합된 release.json(서비스별 커밋 SHA)과 Terraform 정의를
+# production environment 승인 후 적용합니다. AWS 변수가 없으면(배포 전) 건너뜁니다.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**.tf"
+      - "deploy/**"
+      - "modules/**"
+      - "ops/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: vars.AWS_TERRAFORM_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-northeast-2' }}
+      TF_IN_AUTOMATION: "1"
+      TF_VAR_environment: ${{ vars.TF_ENVIRONMENT || 'prod' }}
+      TF_VAR_hosted_zone_name: ${{ vars.TF_HOSTED_ZONE_NAME }}
+      TF_VAR_domain_name: ${{ vars.TF_DOMAIN_NAME }}
+      TF_VAR_grafana_allowed_cidrs: ${{ vars.TF_GRAFANA_ALLOWED_CIDRS || '[]' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: 배포 조합 읽기
+        run: |
+          for k in backend LLM agent dashboard; do
+            echo "SHA_$k=$(jq -r ".services.$k" deploy/release.json)" >> "$GITHUB_ENV"
+          done
+          jq . deploy/release.json
+
+      # 서비스 레포가 main 병합 때 올린 이미지가 모두 있어야 배포합니다 (이미지는 서비스 레포에서 한 번만 빌드)
+      - name: 서비스 이미지 확인
+        run: |
+          missing=0
+          for pair in "backend:$SHA_backend" "ai:$SHA_LLM" "business-mcp:$SHA_agent" "rag-mcp:$SHA_agent"; do
+            repo="mro/${pair%%:*}"; tag="${pair#*:}"
+            if aws ecr describe-images --repository-name "$repo" --image-ids imageTag="$tag" >/dev/null 2>&1; then
+              echo "OK  $repo:$tag"
+            else
+              echo "없음 $repo:$tag (해당 서비스 레포의 Release 워크플로를 확인하세요)" >&2; missing=1
+            fi
+          done
+          aws s3 ls "s3://${{ vars.RELEASES_BUCKET }}/dashboard/$SHA_dashboard/index.html" >/dev/null \
+            || { echo "없음 dashboard 빌드 $SHA_dashboard" >&2; missing=1; }
+          exit $missing
+
+      # rag-restore는 운영 작업용 이미지라 backend 커밋 기준으로 여기서 만듭니다
+      - name: rag-restore 이미지 준비
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          if aws ecr describe-images --repository-name mro/rag-restore --image-ids imageTag="$SHA_backend" >/dev/null 2>&1; then
+            echo "이미 있음"; exit 0
+          fi
+          git clone -q https://github.com/${{ github.repository_owner }}/backend.git backend-src
+          git -C backend-src checkout -q "$SHA_backend"
+          docker build -f ops/rag-restore.Dockerfile -t "$REGISTRY/mro/rag-restore:$SHA_backend" backend-src
+          docker push "$REGISTRY/mro/rag-restore:$SHA_backend"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.2
+          terraform_wrapper: false
+      - run: terraform init -input=false -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+      - run: terraform apply -input=false -auto-approve
+
+      - name: 프론트 반영
+        run: |
+          bucket="$(terraform output -raw frontend_bucket)"
+          dist="$(terraform output -raw cloudfront_distribution_id)"
+          aws s3 sync "s3://${{ vars.RELEASES_BUCKET }}/dashboard/$SHA_dashboard/" "s3://$bucket/" --delete
+          aws cloudfront create-invalidation --distribution-id "$dist" --paths '/*'

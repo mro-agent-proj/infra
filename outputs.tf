@@ -36,9 +36,13 @@ output "openai_secret_id" {
   value       = aws_secretsmanager_secret.openai.name
 }
 
-output "github_deploy_role_arn" {
-  description = "이미지 push · 프론트 업로드용 (main 브랜치)"
-  value       = aws_iam_role.github_deploy.arn
+output "github_push_role_arns" {
+  description = "서비스 레포별 이미지·빌드 업로드 역할 (각 레포 변수 AWS_PUSH_ROLE_ARN에 넣습니다)"
+  value       = { for r, role in aws_iam_role.github_image_push : r => role.arn }
+}
+
+output "releases_bucket" {
+  value = aws_s3_bucket.releases.bucket
 }
 
 output "github_terraform_role_arn" {

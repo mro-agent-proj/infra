@@ -1,0 +1,32 @@
+name: Check
+
+# PR마다 Terraform 형식·문법과 배포 조합 파일을 검사합니다. AWS에는 접속하지 않습니다.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.2
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+      - run: (cd bootstrap && terraform init -backend=false -input=false && terraform validate)
+      - name: release.json 형식 (서비스 4개, 40자리 커밋 SHA)
+        run: |
+          jq -e '
+            (.combo | type == "string") and
+            (.services | keys == ["LLM", "agent", "backend", "dashboard"]) and
+            ([.services[] | test("^[0-9a-f]{40}$")] | all)
+          ' deploy/release.json

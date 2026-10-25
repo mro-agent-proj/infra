@@ -1,0 +1,54 @@
+name: Promote
+
+# 통합 레포가 검증을 통과한 조합(verified 태그)을 보내오면 release.json을 바꾸는 PR을 엽니다.
+# PR이 병합되면 deploy 워크플로가 이 조합을 배포합니다.
+on:
+  repository_dispatch:
+    types: [combo-verified]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # 봇 토큰으로 연 PR이어야 PR 검사(check.yml)가 돌아갑니다 (GITHUB_TOKEN으로 연 PR은 워크플로를 띄우지 않음)
+      - uses: actions/create-github-app-token@v1
+        id: app
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app.outputs.token }}
+      - name: release.json 갱신
+        env:
+          PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+        run: |
+          echo "$PAYLOAD" | jq -e '
+            (.combo | test("^verified-[0-9TZ]+$")) and
+            ([.services.backend, .services.LLM, .services.agent, .services.dashboard] | map(test("^[0-9a-f]{40}$")) | all)
+          ' >/dev/null || { echo "잘못된 조합 정보입니다: $PAYLOAD" >&2; exit 1; }
+          echo "$PAYLOAD" | jq '{combo: ("mro-agent-integration@" + .combo),
+            services: {backend: .services.backend, LLM: .services.LLM, agent: .services.agent, dashboard: .services.dashboard}}' \
+            > deploy/release.json
+          echo "COMBO=$(echo "$PAYLOAD" | jq -r .combo)" >> "$GITHUB_ENV"
+          cat deploy/release.json
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ steps.app.outputs.token }}
+          branch: release/${{ env.COMBO }}
+          commit-message: "release: ${{ env.COMBO }}"
+          title: "release: ${{ env.COMBO }}"
+          body: |
+            통합 레포에서 검증을 통과한 조합 `${{ env.COMBO }}`을 배포 대상으로 올립니다.
+
+            - 조합: https://github.com/${{ github.repository_owner }}/mro-agent-integration/releases/tag/${{ env.COMBO }}
+            - 병합하면 deploy 워크플로가 `production` 승인을 받은 뒤 배포합니다.
+          delete-branch: true

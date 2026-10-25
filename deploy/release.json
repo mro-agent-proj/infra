@@ -1,0 +1,9 @@
+{
+  "combo": "mro-agent-integration@74313d4",
+  "services": {
+    "backend": "c6479cf168427839d4e15b2b36a1182ccf394a56",
+    "LLM": "d83ee967853a436814d6d0d04dc5ef91b9a26ec3",
+    "agent": "80554cea8343be52fe4d25ce5c97942391c5c38a",
+    "dashboard": "1491195007b3fb0843da3927c9bde519b4607cdc"
+  }
+}
