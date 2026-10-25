@@ -53,3 +53,17 @@ jobs:
             - 조합: https://github.com/${{ github.repository_owner }}/${{ vars.INTEGRATION_REPO || 'integration' }}/tree/${{ env.COMBO }}
             - 병합하면 deploy 워크플로가 `production` 승인을 받은 뒤 배포합니다.
           delete-branch: true
+
+      # 배포 대상은 최신 검증 조합 하나뿐이므로, 이번 조합이 아닌 열린 release PR은 닫고 브랜치를 지웁니다
+      - name: 이전 release PR 닫기
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          KEEP: release/${{ env.COMBO }}
+        run: |
+          gh pr list -R "$GITHUB_REPOSITORY" --state open --limit 100 --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("release/")) | select(.headRefName != $ENV.KEEP) | .number' |
+          while read -r n; do
+            gh pr close "$n" -R "$GITHUB_REPOSITORY" --delete-branch \
+              --comment "더 새 검증 조합 \`${COMBO}\`의 release PR로 대체되어 닫습니다."
+            echo "닫음: #$n"
+          done
