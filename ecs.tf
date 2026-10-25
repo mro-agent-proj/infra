@@ -35,8 +35,40 @@ resource "aws_ecr_lifecycle_policy" "app" {
   })
 }
 
+# Docker Hub 공개 이미지(prometheus, grafana, postgres)는 ECR pull-through cache로 받습니다.
+# NAT IP 하나로 나가는 익명 pull이 Docker Hub 횟수 제한에 걸리지 않게 하고, 한 번 받은 이미지는 ECR에서 내려줍니다.
+# 자격 증명 비밀은 apply 전에 직접 만듭니다 (이름은 ecr-pullthroughcache/ 로 시작해야 함, README 참고).
+data "aws_secretsmanager_secret" "dockerhub" {
+  name = var.dockerhub_secret_name
+}
+
+resource "aws_ecr_pull_through_cache_rule" "dockerhub" {
+  ecr_repository_prefix = "docker-hub"
+  upstream_registry_url = "registry-1.docker.io"
+  credential_arn        = data.aws_secretsmanager_secret.dockerhub.arn
+}
+
+# 캐시로 자동 생성되는 리포지토리에도 스캔·보관 개수를 앱 리포지토리와 같게 적용합니다.
+resource "aws_ecr_repository_creation_template" "dockerhub" {
+  prefix               = aws_ecr_pull_through_cache_rule.dockerhub.ecr_repository_prefix
+  applied_for          = ["PULL_THROUGH_CACHE"]
+  image_tag_mutability = "MUTABLE"
+  lifecycle_policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "최근 이미지 10개만 보관"
+      selection    = { tagStatus = "any", countType = "imageCountMoreThan", countNumber = 10 }
+      action       = { type = "expire" }
+    }]
+  })
+}
+
 locals {
   image = { for k, r in aws_ecr_repository.app : k => "${r.repository_url}:${var.image_tag}" }
+
+  # 예: <계정>.dkr.ecr.<리전>.amazonaws.com/docker-hub/prom/prometheus:v3.5.0
+  # Docker 공식 이미지는 library/ 를 붙입니다 (postgres → library/postgres).
+  dockerhub = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com/${aws_ecr_pull_through_cache_rule.dockerhub.ecr_repository_prefix}"
 
   service_defaults = {
     cluster_name                  = aws_ecs_cluster.main.name

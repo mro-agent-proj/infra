@@ -68,14 +68,22 @@ variable "log_retention_days" {
   default = 14
 }
 
+variable "dockerhub_secret_name" {
+  description = "ECR pull-through cache용 Docker Hub 자격 증명 비밀 ({\"username\",\"accessToken\"})"
+  type        = string
+  default     = "ecr-pullthroughcache/docker-hub"
+}
+
 variable "prometheus_image" {
-  type    = string
-  default = "prom/prometheus:v3.5.0"
+  description = "Docker Hub 이미지 이름:태그 (pull-through cache로 받음)"
+  type        = string
+  default     = "prom/prometheus:v3.5.0"
 }
 
 variable "grafana_image" {
-  type    = string
-  default = "grafana/grafana-oss:12.1.0"
+  description = "Docker Hub 이미지 이름:태그 (pull-through cache로 받음)"
+  type        = string
+  default     = "grafana/grafana-oss:12.1.0"
 }
 
 variable "prometheus_retention" {

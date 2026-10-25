@@ -218,7 +218,7 @@ module "prometheus" {
   source = "./modules/ecs-service"
 
   name                  = "prometheus"
-  image                 = var.prometheus_image
+  image                 = "${local.dockerhub}/${var.prometheus_image}"
   cpu                   = 256
   memory                = 1024
   desired_count         = local.desired
@@ -302,7 +302,7 @@ module "grafana" {
   source = "./modules/ecs-service"
 
   name           = "grafana"
-  image          = var.grafana_image
+  image          = "${local.dockerhub}/${var.grafana_image}"
   cpu            = 256
   memory         = 512
   desired_count  = local.desired

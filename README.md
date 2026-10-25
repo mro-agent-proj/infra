@@ -37,7 +37,7 @@
 | `data_stores.tf` | RDS, Amazon MQ, EFS |
 | `secrets.tf` | JWT·MCP 서명 키·조회 계정 비밀번호 생성, 접속 URL 조립 |
 | `iam.tf` | ECS 실행 역할, 태스크 역할 (ECS Exec, EFS, 전달본 읽기) |
-| `ecs.tf`, `modules/ecs-service/` | 클러스터, ECR, 서비스 4개 |
+| `ecs.tf`, `modules/ecs-service/` | 클러스터, ECR (앱 이미지 + Docker Hub pull-through cache), 서비스 4개 |
 | `edge.tf` | ACM, ALB, CloudFront, 프론트 S3, Route 53 |
 | `ops.tf`, `ops/rag-restore.Dockerfile` | `db-init`, `rag-restore` 1회성 태스크 |
 | `monitoring.tf` | Prometheus·Grafana (ECS, EFS 저장), Grafana는 `/grafana/` 경로로 노출 |
@@ -53,33 +53,37 @@ cd infra/bootstrap
 terraform init && terraform apply -var state_bucket_name=mro-agent-tfstate-<계정ID>
 #    → versions.tf의 backend bucket 값을 같은 이름으로 바꿉니다.
 
-# 2. 인프라 (서비스는 0개로)
+# 2. Docker Hub 자격 증명 (ECR pull-through cache용, Docker Hub → Account settings → Personal access tokens에서 읽기 전용 토큰 발급)
+aws secretsmanager create-secret --name ecr-pullthroughcache/docker-hub \
+  --secret-string '{"username":"<Docker Hub ID>","accessToken":"<토큰>"}'
+
+# 3. 인프라 (서비스는 0개로)
 cd ..
 cp terraform.tfvars.example terraform.tfvars    # 도메인 채우기
 terraform init
 terraform apply -var services_enabled=false
 
-# 3. OpenAI 키
+# 4. OpenAI 키
 aws secretsmanager put-secret-value --secret-id "$(terraform output -raw openai_secret_id)" --secret-string 'sk-...'
 
-# 4. 이미지 (레포 루트에서, TAG = git 커밋 SHA)
+# 5. 이미지 (레포 루트에서, TAG = git 커밋 SHA)
 #    backend/  ai/  mcp/docker/business-mcp.Dockerfile  mcp/docker/rag-mcp.Dockerfile  infra/ops/rag-restore.Dockerfile
 #    → terraform output ecr_repositories 의 주소로 push
 
-# 5. MCP 조회 계정에 LOGIN·비밀번호 부여 (권한은 Flyway V4가 줍니다. 서비스보다 먼저 돌려야 MCP가 첫 기동부터 로그인됩니다)
+# 6. MCP 조회 계정에 LOGIN·비밀번호 부여 (권한은 Flyway V4가 줍니다. 서비스보다 먼저 돌려야 MCP가 첫 기동부터 로그인됩니다)
 aws ecs run-task --cluster "$(terraform output -raw ecs_cluster)" --launch-type FARGATE \
   --task-definition mro-prod-db-init \
   --network-configuration "$(terraform output -raw run_task_network_configuration)"
 
-# 6. 서비스 기동
+# 7. 서비스 기동
 terraform apply -var image_tag=$TAG
 
-# 7. RAG 전달본 복원 (backend가 healthy가 된 뒤)
+# 8. RAG 전달본 복원 (backend가 healthy가 된 뒤)
 gh release download data-2026-10-22 --repo mro-agent-proj/mro-agent-integration --dir /tmp/release
 aws s3 cp --recursive /tmp/release "s3://$(terraform output -raw rag_data_bucket)/data-2026-10-22/"
-aws ecs run-task ... --task-definition mro-prod-rag-restore ...   # 5번과 같은 옵션
+aws ecs run-task ... --task-definition mro-prod-rag-restore ...   # 6번과 같은 옵션
 
-# 8. 프론트
+# 9. 프론트
 cd ../frontend && pnpm install && pnpm build
 aws s3 sync dist "s3://$(terraform -chdir=../infra output -raw frontend_bucket)" --delete
 aws cloudfront create-invalidation --distribution-id "$(terraform -chdir=../infra output -raw cloudfront_distribution_id)" --paths '/*'

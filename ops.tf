@@ -64,7 +64,7 @@ resource "aws_ecs_task_definition" "db_init" {
 
   container_definitions = jsonencode([{
     name      = "db-init"
-    image     = "postgres:16-alpine"
+    image     = "${local.dockerhub}/library/postgres:16-alpine"
     essential = true
     command = ["sh", "-c", join(" ", [
       "printf '%s\\n' \"$INIT_SQL\" |",

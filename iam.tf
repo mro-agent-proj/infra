@@ -36,6 +36,20 @@ resource "aws_iam_role_policy" "execution_secrets" {
   policy = data.aws_iam_policy_document.execution_secrets.json
 }
 
+# pull-through cache: 캐시에 아직 없는 이미지를 처음 pull할 때 ECR이 리포지토리를 만들고 Docker Hub에서 가져옵니다.
+data "aws_iam_policy_document" "execution_pull_through" {
+  statement {
+    actions   = ["ecr:CreateRepository", "ecr:BatchImportUpstreamImage"]
+    resources = ["arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/${aws_ecr_pull_through_cache_rule.dockerhub.ecr_repository_prefix}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "execution_pull_through" {
+  name   = "ecr-pull-through-cache"
+  role   = aws_iam_role.execution.id
+  policy = data.aws_iam_policy_document.execution_pull_through.json
+}
+
 # ---------- 태스크 역할: 컨테이너 안의 앱이 쓰는 권한 ----------
 # 앱은 AWS API를 직접 부르지 않습니다. ECS Exec(디버깅 셸)만 허용합니다.
 data "aws_iam_policy_document" "ecs_exec" {
