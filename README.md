@@ -4,7 +4,7 @@ AWS 인프라(Terraform)와 배포를 맡는 레포입니다. **운영 배포는
 로컬 `integration/scripts/up.sh` 스택을 AWS로 옮긴 정의이며, 서비스 이름·포트·환경변수는
 각 서비스 레포의 compose 파일과 `.env.example`을 따릅니다.
 
-> 상태: 코드 작성과 `terraform validate`까지 확인했습니다. 실제 AWS에 apply하지는 않았습니다.
+> 아직 AWS에 apply하지 않은 정의입니다.
 
 ## 레포 구성
 
@@ -136,7 +136,7 @@ aws ecs run-task ... --task-definition mro-prod-rag-restore ...   # 6번과 같�
      `TF_GRAFANA_ALLOWED_CIDRS`(JSON 목록, 예: `["203.0.113.10/32"]`)
 3. **infra 레포** Settings → Environments → `production`: Required reviewers 지정. main 브랜치 보호(PR·리뷰 필수).
 4. **integration** Settings → Rules: main에 push·PR 병합을 막고 GitHub App만 우회(bypass) 허용.
-   문서(`report/` 등)는 관리자만 우회해서 고칩니다.
+   문서·스크립트는 관리자만 우회해서 고칩니다.
 
 AWS 변수가 비어 있으면 Release의 ECR 단계와 Deploy가 건너뛰어지므로, 인프라를 올리기 전에도 워크플로는 실패하지 않습니다.
 
