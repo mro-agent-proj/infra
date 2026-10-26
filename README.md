@@ -188,12 +188,26 @@ CloudWatch의 WAF 지표·샘플 요청으로 오탐이 없는지 확인한 뒤 
 - Prometheus TSDB는 EFS에 둡니다. Prometheus 공식 문서는 NFS를 지원 대상으로 보지 않으므로, 데이터가 커지거나
   장기 보관이 필요해지면 Amazon Managed Prometheus(remote_write)로 옮기는 것을 검토합니다.
 
-## 비용 (서울 리전, 상시 가동 기준 대략)
+## 비용 (서울 리전, 24시간 켜 둘 때 대략)
 
-월 약 $240, 하루 약 $8. 모니터링(Fargate 2개 + EFS)을 켜면 월 $25~35, WAF(Web ACL + 규칙 9개, 관리형 규칙 그룹 4개 포함)는 월 약 $15가 더해집니다. NAT·ALB·RDS·Amazon MQ가 트래픽과 무관하게 고정으로 나갑니다.
-안 쓸 때는 `terraform apply -var services_enabled=false`로 컨테이너 비용만 줄이거나,
-`terraform destroy`로 전부 지웁니다. `environment=prod`는 RDS 삭제 보호가 켜져 destroy가 막히므로,
-시연용으로 올렸다 내릴 거라면 처음부터 `environment=dev`로 만듭니다.
+| 항목 | 월 비용 |
+| --- | --- |
+| **기본 구성** | **약 $240** (하루 약 $8) |
+| + 모니터링 (Prometheus·Grafana 컨테이너 2개 + 저장소 EFS) | +$25~35 |
+| + WAF (Web ACL, 규칙 9개 중 관리형 규칙 그룹 4개) | +약 $15 |
+
+**사용하지 않아도 나가는 비용이 있습니다.** NAT 게이트웨이, 로드밸런서(ALB), DB(RDS), 메시지 큐(Amazon MQ)는 켜져 있기만 해도 요금이 붙습니다. 요청이 0건이어도 마찬가지입니다.
+
+### 안 쓸 때 비용 줄이기
+
+| 방법 | 명령어 | 결과 |
+| --- | --- | --- |
+| 컨테이너만 끄기 | `terraform apply -var services_enabled=false` | ECS 서비스가 0개가 되어 컨테이너 비용만 빠집니다. NAT·ALB·RDS·MQ 비용은 계속 나가고, DB 데이터는 남습니다. |
+| 전부 삭제 | `terraform destroy` | 모든 리소스와 비용이 사라집니다. `dev`에서는 최종 스냅샷 없이 DB 데이터도 함께 지워집니다. |
+
+### 시연용이면 처음부터 `environment=dev`로
+
+`environment=prod`로 만들면 DB 삭제 보호가 켜져서 `terraform destroy`가 실패합니다. 잠깐 띄웠다 지울 거라면 처음 만들 때부터 `environment=dev`를 쓰세요.
 
 ## 남은 과제
 
